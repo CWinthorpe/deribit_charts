@@ -1,5 +1,5 @@
 # Deribit Charts  
-Chart_writer.js will automatically pull chart history from Deribit format it in OHLC and place it in JSON files. You can specific any timeframe you want in seconds on the config.json file.
+Chart_writer.js will automatically pull chart history from Deribit format it in OHLC and place it in JSON files. You can specify any timeframe you want in seconds on the config.json file.
 
 ## How to use  
 1. clone this repository and run __npm install__ in folder to install all required dependencies  
