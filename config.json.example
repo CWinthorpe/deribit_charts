@@ -1,0 +1,6 @@
+{
+    "access_key" : "YOURKEY",
+    "secret_key" : "YOURSECRET",
+    "candle" : 3600,
+    "candleStart" : "1/1/2019 00:00:00"
+}
