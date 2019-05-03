@@ -131,7 +131,7 @@ wsDB.open('wss://www.deribit.com/ws/api/v1/');
 wsDB.onopen = function (e) {
     //Here we are with an open websocket
     if (workingCandle.length > 0 && lastid != 0) {
-        startingId = lastId + 1;
+        startingId = lastid + 1;
     }
     if (workingCandle.length > 0 && lastid == 0) {
         timeStamp = workingCandle[workingCandle.length - 1].timeStamp + (config.candle * 1000);
@@ -156,17 +156,18 @@ wsDB.onopen = function (e) {
     }));
     //Request our initial trades
     var sndArg = null;
+    var instrument = config.currency.toUpperCase() + '-PERPETUAL';
     if (startingId == 0) {
         log('Starting Candles from scratch');
         sndArg = {
-            instrument: "BTC-PERPETUAL",
+            instrument: instrument,
             count: 1000,
             startTimestamp: timeStamp,
             includeOld: true
         };
     } else {
         sndArg = {
-            instrument: "BTC-PERPETUAL",
+            instrument: instrument,
             count: 1000,
             startId: startingId,
             includeOld: true
@@ -214,7 +215,7 @@ var processMessage = function (data) {
                     //our subscription feed started
                     if (response.success == true) {
                         log("Subscriptions started");
-                        clearInterval(subActive);
+                        clearInterval(subWatcher);
                         subWatcher = setInterval(function () {
                             var curTime = new Date().getTime() / 1000;
                             if (curTime - lastTradeTime > 300 && wsDB.isOpen) {
@@ -228,9 +229,10 @@ var processMessage = function (data) {
                     } else {
                         log("Error, subscription setup:" + util.inspect(response, false, null));
                         log("Sending subscription request again");
+                        var instrument = config.currency.toUpperCase() + '-PERPETUAL';
                         var subArg = {
                             event: ["trade"],
-                            instrument: ["BTC-PERPETUAL"]
+                            instrument: [instrument]
                         };
                         //Generate signature, using a callback to make sure we have signature before sending.
                         var theSig = get_signature("/api/v1/private/subscribe", subArg);
@@ -281,8 +283,9 @@ var processMessage = function (data) {
 
 //get some more candles
 var moreCandles = function (nextId) {
+    var instrument = config.currency.toUpperCase() + '-PERPETUAL';
     var sndArg = {
-        instrument: "BTC-PERPETUAL",
+        instrument: instrument,
         count: 1000,
         startId: nextId,
         includeOld: true
@@ -393,9 +396,10 @@ function processTrades(trades) {
             //were caught up start subscription
             var curTime = new Date().getTime() / 1000;
             lastTradeTime = curTime;
+            var instrument = config.currency.toUpperCase() + '-PERPETUAL';
             var subArg = {
                 event: ["trade"],
-                instrument: ["BTC-PERPETUAL"]
+                instrument: [instrument]
             };
             
             var theSig = get_signature("/api/v1/private/subscribe", subArg);
