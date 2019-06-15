@@ -142,8 +142,8 @@ wsDB.onopen = function (e) {
         totalCandles = (currentTime - curCandle) / config.candle;
         candlesProcessed = 0;
         log('Using existing file to start');
-    } 
-    
+    }
+
     log("Deribit WebSocketClient connected:");
     //Set a heartbeat to keep connection alive
     //
@@ -247,7 +247,7 @@ var processMessage = function (data) {
                 if (response.id == 1111) {
                     if (response.success == true) {
                         //process all trades received
-                        
+
                         processTrades(response.result);
                     }
                 }
@@ -351,6 +351,16 @@ function processTrades(trades) {
             lastid = Number(trades[i].tradeId);
             volume = volume + trades[i].quantity;
         } else {
+            var nextTimeStamp = timeStamp;
+            var skippedCandles = 0;
+            do {
+                nextTimeStamp = nextTimeStamp + (config.candle * 1000);
+                skippedCandles++;
+                candlesProcessed++;
+            } while (trades[i].timeStamp > nextTimeStamp + (config.candle * 1000));
+            if (skippedCandles > 1) {
+                log("Candles skipped: " + (skippedCandles -1));
+            }
             var open = prices[0];
             var close = prices[prices.length - 1];
             var high = Math.max.apply(Math, prices);
@@ -370,7 +380,7 @@ function processTrades(trades) {
             } else {
                 log("ERROR: Missing candle: timestamp: " + timeStamp);
             }
-            candlesProcessed++;
+            //candlesProcessed++;
             //log(util.inspect(workingCandle, false, null))
             curCandle = timeStamp / 1000;
             var percToGo = (candlesProcessed / totalCandles) * 100;
@@ -378,7 +388,7 @@ function processTrades(trades) {
                 log('Backlogged Candles complete: ' + percToGo.toFixed(2) + '%');
             }
             writeCandles();
-            timeStamp = timeStamp + (config.candle * 1000);
+            timeStamp = nextTimeStamp;
             prices.length = 0;
             indexPrices.length = 0;
             volume = 0;
@@ -401,7 +411,7 @@ function processTrades(trades) {
                 event: ["trade"],
                 instrument: [instrument]
             };
-            
+
             var theSig = get_signature("/api/v1/private/subscribe", subArg);
             wsDB.send(JSON.stringify({
                 action: "/api/v1/private/subscribe",
