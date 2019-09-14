@@ -25,6 +25,7 @@
   "dependencies": {
     "crypto": "^1.0.1",
     "jsonfile": "^5.0.0",
+    "mongodb": "^3.3.2",
     "util": "^0.11.1",
     "ws": "^6.1.4"
   }
