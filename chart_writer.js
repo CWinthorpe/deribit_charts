@@ -27,6 +27,11 @@ var subWatcher = null;
 var candleFile = config.candle + '_candles.json';
 var lastTradeTime = 0;
 var lastHeartBeat = 0;
+var toMore = null;
+var tokenAccess = "";
+var refreshToken = "";
+var tokenExpire = 0;
+
 try {
     workingCandle = jsonfile.readFileSync(candleFile);
     log('loaded candle file');
@@ -107,7 +112,7 @@ WebSocketClient.prototype.close = function () {
 
     } catch (e) {
         this.instance.emit('error', e);
-        wsDB.open('wss://www.deribit.com/ws/api/v1/');
+        wsDB.open('wss://www.deribit.com/ws/api/v2/');
     }
 }
 WebSocketClient.prototype.onopen = function (e) {
@@ -123,12 +128,36 @@ WebSocketClient.prototype.onclose = function (e) {
     log("WebSocketClient: closed", arguments);
 }
 
+function getMax(arr) {
+    let len = arr.length;
+    let max = -Infinity;
+
+    while (len--) {
+        max = arr[len] > max ? arr[len] : max;
+    }
+    return max;
+}
+
+function getMin(arr) {
+    let len = arr.length;
+    let min = Infinity;
+
+    while (len--) {
+        min = arr[len] < min ? arr[len] : min;
+    }
+    return min;
+}
+
 //Create Websocket object for talking to Deribit
 const wsDB = new WebSocketClient();
-wsDB.open('wss://www.deribit.com/ws/api/v1/');
+wsDB.open('wss://www.deribit.com/ws/api/v2');
 
 //When connection opens lets do some shit.
 wsDB.onopen = function (e) {
+    tokenAccess = "";
+    refreshToken = "";
+    tokenExpire = 0;
+    
     //Here we are with an open websocket
     if (workingCandle.length > 0 && lastid != 0) {
         startingId = lastid + 1;
@@ -147,37 +176,49 @@ wsDB.onopen = function (e) {
     log("Deribit WebSocketClient connected:");
     //Set a heartbeat to keep connection alive
     //
+    
+    
     wsDB.send(JSON.stringify({
-        action: "/api/v1/public/setheartbeat",
-        id: 1,
-        arguments: {
-            interval: 60
+        "jsonrpc" : "2.0",
+        "id" : 1,
+        "method" : "public/set_heartbeat",
+        "params" : {
+          "interval" : 60
         }
-    }));
+      }));
+    //Going to have to move this till after we have authentication
+    
     //Request our initial trades
     var sndArg = null;
     var instrument = config.currency.toUpperCase() + '-PERPETUAL';
     if (startingId == 0) {
         log('Starting Candles from scratch');
         sndArg = {
-            instrument: instrument,
-            count: 1000,
-            startTimestamp: timeStamp,
-            includeOld: true
-        };
+            "jsonrpc" : "2.0",
+            "id" : 1111,
+            "method" : "public/get_last_trades_by_instrument_and_time",
+            "params" : {
+              "instrument_name" : instrument,
+              "start_timestamp" : timeStamp,
+              "count" : 1000,
+              "include_old" : true
+            }
+          };
     } else {
         sndArg = {
-            instrument: instrument,
-            count: 1000,
-            startId: startingId,
-            includeOld: true
-        };
+            "jsonrpc" : "2.0",
+            "id" : 1111,
+            "method" : "public/get_last_trades_by_instrument",
+            "params" : {
+              "instrument_name" : instrument,
+              "count" : 1000,
+              "start_seq" : startingId,
+              "include_old" : true
+            }
+          };
     }
-    wsDB.send(JSON.stringify({
-        action: "/api/v1/public/getlasttrades",
-        id: 1111,
-        arguments: sndArg
-    }));
+    wsDB.send(JSON.stringify(sndArg));
+    
 }
 
 
@@ -197,7 +238,7 @@ var processMessage = function (data) {
             if (response.id != undefined) {
                 if (response.id == 1) {
                     //our heartbeat started
-                    if (response.success == true) {
+                    if (response.error == undefined) {
                         log("Heartbeat started");
                     } else {
                         log("Error, Heartbeat setup:" + response);
@@ -213,7 +254,7 @@ var processMessage = function (data) {
                 }
                 if (response.id == 2) {
                     //our subscription feed started
-                    if (response.success == true) {
+                    if (response.result != undefined) {
                         log("Subscriptions started");
                         clearInterval(subWatcher);
                         subWatcher = setInterval(function () {
@@ -229,72 +270,79 @@ var processMessage = function (data) {
                     } else {
                         log("Error, subscription setup:" + util.inspect(response, false, null));
                         log("Sending subscription request again");
-                        var instrument = config.currency.toUpperCase() + '-PERPETUAL';
-                        var subArg = {
-                            event: ["trade"],
-                            instrument: [instrument]
-                        };
-                        //Generate signature, using a callback to make sure we have signature before sending.
-                        var theSig = get_signature("/api/v1/private/subscribe", subArg);
-                        wsDB.send(JSON.stringify({
-                            action: "/api/v1/private/subscribe",
-                            id: 2,
-                            arguments: subArg,
-                            sig: theSig
-                        }));
+                        subscribeTrades();
                     }
                 }
+                
                 if (response.id == 1111) {
-                    if (response.success == true) {
+                    if (response.error == undefined) {
                         //process all trades received
-
-                        processTrades(response.result);
+                        processTrades(response.result.trades, response.result.has_more);
+                    } else {
+                        log(util.inspect(response.error, false, null));
+                        moreCandles(lastid + 1);
                     }
+                }
+                if (response.id == 4444) {
+                    //log(util.inspect(response, false, null));
                 }
             }
         }
-        if (response.message == "heartbeat") {
+        if (response.method == "heartbeat") {
             //Update last heartbeat time
             //log('Heartbeat');
             lastHeartBeat = new Date().getTime() / 1000;
         }
         //Resond to request from server for a heartbeat
-        if (response.message == "test_request") {
-            //log('Ping');
-            lastHeartBeat = new Date().getTime() / 1000;
-            wsDB.send(JSON.stringify({
-                //Respond to keep connection alive
-                "action": "/api/v1/public/ping"
-            }));
-        }
-        if (response.notifications != undefined) {
-            //log(util.inspect(response.notifications, false, null))
-            for (var i in response.notifications) {
-                if (response.notifications[i].message == "trade_event") {
+        if (response.method != undefined) {
+            //log(util.inspect(response, false, null));
+            if (response.method == "heartbeat") {
+                //log('Ping');
+                lastHeartBeat = new Date().getTime() / 1000;
+                if (response.params.type == "test_request") {
+                    //log('Pong');
+                    wsDB.send(JSON.stringify({
+                        "jsonrpc" : "2.0",
+                        "id" : 4444,
+                        "method" : "public/test"
+                    }));
+                }
+            }
+            if (response.method == "subscription") {
+                //log(util.inspect(response, false, null))
+                var subChannel = 'trades.' + config.currency.toUpperCase() + '-PERPETUAL.raw';
+                if (response.params.channel == subChannel) {
                     var curTime = new Date().getTime() / 1000;
                     lastTradeTime = curTime;
-                    trades = response.notifications[i].result;
-                    processTrades(trades);
+                    processTrades(response.params.data, false);
                 }
             }
         }
+        
     }
 }
 
 //get some more candles
 var moreCandles = function (nextId) {
+    //console.log('Next Seq: ' +nextId);
     var instrument = config.currency.toUpperCase() + '-PERPETUAL';
     var sndArg = {
-        instrument: instrument,
-        count: 1000,
-        startId: nextId,
-        includeOld: true
-    };
-    wsDB.send(JSON.stringify({
-        action: "/api/v1/public/getlasttrades",
-        id: 1111,
-        arguments: sndArg
-    }));
+        "jsonrpc" : "2.0",
+        "id" : 1111,
+        "method" : "public/get_last_trades_by_instrument",
+        "params" : {
+          "instrument_name" : instrument,
+          "count" : 1000,
+          "start_seq" : nextId,
+          "include_old" : true
+        }
+      };
+    setTimeout(function (sndArg) {
+        wsDB.send(JSON.stringify(sndArg));
+    }, 100, sndArg);
+    toMore = setTimeout(function (sndArg) {
+        wsDB.send(JSON.stringify(sndArg));
+    }, 5000, sndArg);
 }
 
 
@@ -311,45 +359,17 @@ var writeCandles = function () {
 }
 
 
-var get_signature = function (action, arguments) {
 
-    var nonce = (new Date()).getTime().toString();
-    var time = new Date().getTime()
 
-    var m = Object.assign({
-            _: time,
-            _ackey: config.access_key,
-            _acsec: config.secret_key,
-            _action: action,
-        },
-        arguments,
-    )
-    var str = serialize(m);
-
-    var binaryHash = crypto.createHash('sha256');
-    binaryHash.update(str);
-    return (
-        config.access_key + "." +
-        nonce.toString() + "." +
-        binaryHash.digest('base64')
-    )
-}
-
-function serialize(m) {
-    return Object.keys(m)
-        .sort()
-        .map(k => (Array.isArray(m[k]) ? `${k}=${m[k].join('')}` : `${k}=${m[k]}`))
-        .join('&')
-}
-
-function processTrades(trades) {
-    //log(util.inspect(trades, false, null));
+function processTrades(trades, has_more) {
+    clearTimeout(toMore);
+    
     for (var i in trades) {
-        if (trades[i].timeStamp < timeStamp + (config.candle * 1000)) {
+        if (trades[i].timestamp < timeStamp + (config.candle * 1000)) {
             prices.push(Number(trades[i].price));
-            indexPrices.push(Number(trades[i].indexPrice));
-            lastid = Number(trades[i].tradeId);
-            volume = volume + trades[i].quantity;
+            indexPrices.push(Number(trades[i].index_price));
+            lastid = Number(trades[i].trade_seq);
+            volume = volume + trades[i].amount;
         } else {
             var nextTimeStamp = timeStamp;
             var skippedCandles = 0;
@@ -357,14 +377,14 @@ function processTrades(trades) {
                 nextTimeStamp = nextTimeStamp + (config.candle * 1000);
                 skippedCandles++;
                 candlesProcessed++;
-            } while (trades[i].timeStamp > nextTimeStamp + (config.candle * 1000));
+            } while (trades[i].timestamp > nextTimeStamp + (config.candle * 1000));
             if (skippedCandles > 1) {
                 log("Candles skipped: " + (skippedCandles -1));
             }
             var open = prices[0];
             var close = prices[prices.length - 1];
-            var high = Math.max.apply(Math, prices);
-            var low = Math.min.apply(Math, prices);
+            var high = getMax(prices);
+            var low = getMin(prices);
             var candle = {
                 timeStamp: timeStamp,
                 open: open,
@@ -393,12 +413,12 @@ function processTrades(trades) {
             indexPrices.length = 0;
             volume = 0;
             prices.push(trades[i].price);
-            indexPrices.push(trades[i].indexPrice);
-            lastid = trades[i].tradeId;
-            volume = volume + trades[i].quantity;
+            indexPrices.push(trades[i].index_price);
+            lastid = trades[i].trade_seq;
+            volume = volume + trades[i].amount;
         }
     }
-    if (trades.length == 1000) {
+    if (has_more) {
         moreCandles(lastid + 1);
     } else {
         if (!subActive) {
@@ -406,19 +426,20 @@ function processTrades(trades) {
             //were caught up start subscription
             var curTime = new Date().getTime() / 1000;
             lastTradeTime = curTime;
-            var instrument = config.currency.toUpperCase() + '-PERPETUAL';
-            var subArg = {
-                event: ["trade"],
-                instrument: [instrument]
-            };
-
-            var theSig = get_signature("/api/v1/private/subscribe", subArg);
-            wsDB.send(JSON.stringify({
-                action: "/api/v1/private/subscribe",
-                id: 2,
-                arguments: subArg,
-                sig: theSig
-            }));
+            subscribeTrades();
         }
     }
+}
+
+function subscribeTrades() {
+    var channel = 'trades.' + config.currency.toUpperCase() + '-PERPETUAL.raw';
+    var msg = {
+        "jsonrpc": "2.0",
+        "method": "public/subscribe",
+        "id": 2,
+        "params": {
+            "channels": [channel]
+        }
+    };
+    wsDB.send(JSON.stringify(msg));
 }
